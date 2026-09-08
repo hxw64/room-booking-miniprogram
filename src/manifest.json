@@ -1,0 +1,39 @@
+﻿{
+  "name": "房间预约",
+  "appid": "",
+  "description": "房间与座位预约小程序",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "vueVersion": "3",
+  "locale": "zh-Hans",
+  "app-plus": {
+    "usingComponents": true,
+    "nvueStyleCompiler": "uni-app",
+    "compilerVersion": 3,
+    "splashscreen": { "alwaysShowBeforeRender": true, "waiting": true, "autoclose": true, "delay": 0 },
+    "modules": {},
+    "distribute": { "android": {}, "ios": {}, "sdkConfigs": {} }
+  },
+  "quickapp": {},
+  "mp-weixin": {
+    "appid": "wx262d74695a917173",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "postcss": true,
+      "minified": true
+    },
+    "usingComponents": true,
+    "lazyCodeLoading": "requiredComponents",
+    "permission": {}
+  },
+  "h5": {
+    "title": "房间预约",
+    "router": { "mode": "hash" }
+  },
+  "mp-alipay": { "usingComponents": true },
+  "mp-baidu": { "usingComponents": true },
+  "mp-toutiao": { "usingComponents": true },
+  "uniStatistics": { "enable": false }
+}
