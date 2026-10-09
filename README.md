@@ -36,20 +36,19 @@ scripts/                构建后同步脚本、纯函数单元测试
 ```
 
 ## 本地构建
-前置：本机已安装 Node.js。命令（本项目使用的 Node 位于 `C:\Users\z3380\Documents\ChatGPT\饮食计划\tools\node-v24.19.0-win-x64`）：
+前置：本机已安装 Node.js（建议 18 及以上）。在项目根目录执行：
 
-```powershell
-$nodeBin='C:\Users\z3380\Documents\ChatGPT\饮食计划\tools\node-v24.19.0-win-x64'
-$env:PATH="$nodeBin;$env:PATH"
-& "$nodeBin\npm.cmd" install
-& "$nodeBin\npm.cmd" run build:mp-weixin
+```bash
+npm install
+npm run build:mp-weixin
+npm test          # 可选：运行纯函数单元测试
 ```
 
 `build:mp-weixin` 会：
 1. 用 `uni build -p mp-weixin` 生成 `dist/build/mp-weixin`。
 2. 运行 `scripts/sync-cloudfunctions.mjs`，把 `cloudfunctions/` 复制到小程序产物，并写入 `project.config.json` 的 `cloudfunctionRoot`。
 
-纯函数单元测试：`& "$nodeBin\node.exe" scripts/test-pure.mjs`
+纯函数单元测试：`npm test`
 
 ## 导入微信开发者工具
 1. 打开微信开发者工具（本机已安装于 `C:\Program Files (x86)\Tencent\微信web开发者工具`）。
@@ -59,23 +58,26 @@ $env:PATH="$nodeBin;$env:PATH"
 CLI 打开/预览/上传（可选）：
 ```powershell
 $cli='C:\Program Files (x86)\Tencent\微信web开发者工具\cli.bat'
-& $cli open --project "C:\Users\z3380\Documents\ChatGPT\权限小程序\dist\build\mp-weixin"
-& $cli preview --project "C:\Users\z3380\Documents\ChatGPT\权限小程序\dist\build\mp-weixin"
+& $cli open --project "<你的项目路径>\dist\build\mp-weixin"
+& $cli preview --project "<你的项目路径>\dist\build\mp-weixin"
 ```
 
 ## 云开发配置
 1. 把云环境 ID 填入 `src/config/index.js` 的 `CLOUD_ENV`，重新执行 `npm run build:mp-weixin`。
 2. 在云开发控制台创建集合：
    - `rooms`：房间资料（图片 fileID、介绍）
-   - `bookings`：预约/申请记录
+   - `bookings`：预约/申请的**占用信息**（房间、座位、时间段、状态），**不含姓名、手机号等个人信息**
+   - `booking_details`：预约人**联系方式与申请原因**（姓名、手机号、reason、openid），仅供云函数读取
    - `slots`：半小时占用锁（并发防双占，云函数内部使用）
    - `admins`：管理员 openid 白名单
    - `users`：可选，预留的用户资料集合
 3. 集合权限建议：
-   - `rooms`、`bookings`：所有用户可读（前端需读取/实时监听占用）
-   - `slots`、`admins`、`users`：保持默认（仅创建者可读写）即可，云函数拥有完全权限
-4. 部署云函数：在微信开发者工具中，分别右键 `cloudfunctions` 下的 `login`、`booking`、`admin`、`autoApprove`，选择“上传并部署：云端安装依赖”。
-5. 定时触发器：`autoApprove` 已带 `config.json`（每分钟触发），上传部署后会自动创建触发器；如未生效，在云开发控制台“云函数 → autoApprove → 触发器”中确认/手动创建。
+   - `rooms`、`bookings`：所有用户可读（前端需读取/实时监听占用；这两张表**不含个人信息**）
+   - `booking_details`、`slots`、`admins`、`users`：保持默认（仅创建者可读写）即可，云函数拥有完全权限
+4. **隐私说明**：预约的姓名、手机号、申请原因一律存放在 `booking_details`（仅云函数可读）；公开可读的 `bookings` 里只有房间/座位/时间段/状态，因此任何人都无法从公开数据里读到预约人身份。管理端通过 `admin` 云函数关联读取 `booking_details`，联系方式照常可见。
+5. **旧数据迁移**：若之前已用旧版（联系方式内联在 `bookings`）写入过记录，部署新版后调用一次管理员云函数 `admin`、`action: "migrateBookingDetails"`，即可把旧记录的联系方式搬到 `booking_details` 并从 `bookings` 中清除；迁移后管理端仍可正常显示联系方式。
+6. 部署云函数：在微信开发者工具中，分别右键 `cloudfunctions` 下的 `login`、`booking`、`admin`、`autoApprove`，选择“上传并部署：云端安装依赖”。
+7. 定时触发器：`autoApprove` 已带 `config.json`（每分钟触发），上传部署后会自动创建触发器；如未生效，在云开发控制台“云函数 → autoApprove → 触发器”中确认/手动创建。
 
 ## 管理员配置
 1. 打开小程序完成一次登录。

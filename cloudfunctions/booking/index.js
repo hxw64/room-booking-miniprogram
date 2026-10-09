@@ -1,6 +1,7 @@
 const cloud = require('wx-server-sdk')
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 const db = cloud.database()
+const _ = db.command
 
 const SLOT_MS = 30 * 60 * 1000
 const NORMAL_MAX_MS = 3 * 3600000
@@ -50,6 +51,90 @@ function fail(message) {
   throw new Error(message)
 }
 
+// ---------------------------------------------------------------------------
+// 隐私拆分（V3）：
+//   bookings        只保存占用信息，集合设为“所有用户可读”，供前端展示/实时监听占用
+//   booking_details 保存姓名/手机号/申请原因/openid，集合保持默认权限（仅云函数可读）
+//   两表用同一个 _id 关联，_id 即 bookingId
+// ---------------------------------------------------------------------------
+
+async function getDetail(bookingId) {
+  try {
+    const res = await db.collection('booking_details').doc(bookingId).get()
+    return res.data || null
+  } catch (e) {
+    return null
+  }
+}
+
+async function saveDetail(bookingId, openid, contact) {
+  await db.collection('booking_details').add({
+    data: {
+      _id: bookingId,
+      _openid: openid,
+      name: contact.name || '',
+      phone: contact.phone || '',
+      reason: contact.reason || '',
+      createdAt: Date.now()
+    }
+  })
+}
+
+// 判断预约是否属于该用户：新数据看 booking_details，历史数据兜底看 bookings._openid
+function isOwner(booking, detail, openid) {
+  if (detail && detail._openid) return detail._openid === openid
+  return !!booking && booking._openid === openid
+}
+
+async function myBookingIds(openid) {
+  const ids = []
+  try {
+    const res = await db.collection('booking_details').where({ _openid: openid }).limit(1000).get()
+    res.data.forEach(d => ids.push(d._id))
+  } catch (e) {}
+  return ids
+}
+
+async function bookingsByIds(ids) {
+  if (!ids.length) return []
+  try {
+    const res = await db.collection('bookings').where({ _id: _.in(ids) }).limit(1000).get()
+    return res.data
+  } catch (e) {
+    return []
+  }
+}
+
+// 兼容拆分前遗留的旧数据（旧记录仍带 _openid）
+async function legacyMine(openid) {
+  try {
+    const res = await db.collection('bookings').where({ _openid: openid }).limit(1000).get()
+    return res.data
+  } catch (e) {
+    return []
+  }
+}
+
+function dedupeById(lists) {
+  const seen = {}
+  const out = []
+  lists.forEach(list => {
+    ;(list || []).forEach(b => {
+      if (!b || seen[b._id]) return
+      seen[b._id] = 1
+      out.push(b)
+    })
+  })
+  return out
+}
+
+async function allMine(openid) {
+  const ids = await myBookingIds(openid)
+  const byDetail = await bookingsByIds(ids)
+  const legacy = await legacyMine(openid)
+  return dedupeById([byDetail, legacy])
+}
+
 async function findConflict(roomId, seatIds, startTs, endTs, excludeId) {
   const res = await db.collection('bookings').where({ roomId }).limit(1000).get()
   for (const b of res.data) {
@@ -66,8 +151,8 @@ async function findConflict(roomId, seatIds, startTs, endTs, excludeId) {
 }
 
 async function findMineConflict(openid, startTs, endTs, excludeId) {
-  const res = await db.collection('bookings').where({ _openid: openid }).limit(1000).get()
-  for (const b of res.data) {
+  const mine = await allMine(openid)
+  for (const b of mine) {
     if (excludeId && b._id === excludeId) continue
     if (b.status !== 'approved' && b.status !== 'pending') continue
     if (overlap(b.startTs, b.endTs, startTs, endTs)) return b
@@ -75,15 +160,17 @@ async function findMineConflict(openid, startTs, endTs, excludeId) {
   return null
 }
 
-async function insertWithSlots(doc, keys, slotMeta) {
+async function insertWithSlots(doc, keys, slotMeta, openid, contact) {
   const addRes = await db.collection('bookings').add({ data: doc })
   const bookingId = addRes._id
   try {
+    await saveDetail(bookingId, openid, contact)
     for (const key of keys) {
       await db.collection('slots').add({ data: { _id: key, bookingId, ...slotMeta } })
     }
     return { id: bookingId }
   } catch (e) {
+    try { await db.collection('booking_details').doc(bookingId).remove() } catch (e2) {}
     try { await db.collection('bookings').doc(bookingId).remove() } catch (e2) {}
     for (const key of keys) {
       try { await db.collection('slots').doc(key).remove() } catch (e2) {}
@@ -124,21 +211,17 @@ async function createRoomBooking(event, openid) {
 
   const keys = slotKeys(roomId, null, startTs, endTs)
   const doc = {
-    _openid: openid,
     roomId,
     seatIds: [],
     startTs,
     endTs,
     type,
     status,
-    reason: reason || '',
-    name,
-    phone,
     slotKeys: keys,
     autoApproved: false,
     createdAt: Date.now()
   }
-  return await insertWithSlots(doc, keys, { roomId, seatNo: null, startTs, endTs })
+  return await insertWithSlots(doc, keys, { roomId, seatNo: null, startTs, endTs }, openid, { name, phone, reason })
 }
 
 async function createSeatBooking(event, openid) {
@@ -159,28 +242,25 @@ async function createSeatBooking(event, openid) {
   const sorted = seatIds.slice().sort((a, b) => a - b)
   const keys = slotKeys(roomId, sorted, startTs, endTs)
   const doc = {
-    _openid: openid,
     roomId,
     seatIds: sorted,
     startTs,
     endTs,
     type: 'normal',
     status: 'approved',
-    reason: '',
-    name,
-    phone,
     slotKeys: keys,
     autoApproved: false,
     createdAt: Date.now()
   }
-  return await insertWithSlots(doc, keys, { roomId, seatNo: null, startTs, endTs })
+  return await insertWithSlots(doc, keys, { roomId, seatNo: null, startTs, endTs }, openid, { name, phone, reason: '' })
 }
 
 async function cancel(event, openid) {
   const { bookingId } = event
   const res = await db.collection('bookings').doc(bookingId).get()
   const b = res.data
-  if (!b || b._openid !== openid) fail('无权操作 / Not allowed')
+  const detail = await getDetail(bookingId)
+  if (!b || !isOwner(b, detail, openid)) fail('无权操作 / Not allowed')
   if (b.status !== 'approved') fail('当前状态不可取消 / Cannot cancel')
   if (Date.now() >= b.startTs) fail('预约已开始，不可取消 / Already started')
   await db.collection('bookings').doc(bookingId).update({ data: { status: 'cancelled' } })
@@ -192,7 +272,8 @@ async function withdraw(event, openid) {
   const { bookingId } = event
   const res = await db.collection('bookings').doc(bookingId).get()
   const b = res.data
-  if (!b || b._openid !== openid) fail('无权操作 / Not allowed')
+  const detail = await getDetail(bookingId)
+  if (!b || !isOwner(b, detail, openid)) fail('无权操作 / Not allowed')
   if (b.status !== 'pending') fail('当前状态不可撤销 / Cannot withdraw')
   await db.collection('bookings').doc(bookingId).update({ data: { status: 'cancelled' } })
   await removeSlots(b)
@@ -200,8 +281,9 @@ async function withdraw(event, openid) {
 }
 
 async function listMine(openid) {
-  const res = await db.collection('bookings').where({ _openid: openid }).orderBy('startTs', 'desc').limit(1000).get()
-  return { list: res.data }
+  const list = await allMine(openid)
+  list.sort((a, b) => b.startTs - a.startTs)
+  return { list }
 }
 
 async function getRoomCode(roomId) {
@@ -218,7 +300,8 @@ async function getBooking(event, openid) {
   if (!bookingId) fail('参数缺失 / Missing params')
   const res = await db.collection('bookings').doc(bookingId).get()
   const b = res.data
-  if (!b || b._openid !== openid) fail('无权操作 / Not allowed')
+  const detail = await getDetail(bookingId)
+  if (!b || !isOwner(b, detail, openid)) fail('无权操作 / Not allowed')
   return b
 }
 
@@ -227,7 +310,8 @@ async function checkIn(event, openid) {
   if (!bookingId) fail('参数缺失 / Missing params')
   const res = await db.collection('bookings').doc(bookingId).get()
   const b = res.data
-  if (!b || b._openid !== openid) fail('无权操作 / Not allowed')
+  const detail = await getDetail(bookingId)
+  if (!b || !isOwner(b, detail, openid)) fail('无权操作 / Not allowed')
   if (b.status !== 'approved') fail('预约未生效，无法报到 / Booking is not active')
   const now = Date.now()
   const leadMs = 10 * 60 * 1000
@@ -241,6 +325,7 @@ async function checkIn(event, openid) {
   await db.collection('bookings').doc(bookingId).update({ data: { checkedInAt: now } })
   return { code, checkedInAt: now }
 }
+
 function ok(data) {
   return { code: 0, data }
 }
