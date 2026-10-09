@@ -39,16 +39,24 @@ async function removeSlots(b) {
 // 前端管理页字段不变，仍可看到姓名 / 手机号 / 申请原因。
 // 兼容拆分前遗留的旧数据：旧记录的联系方式仍内联在 bookings 里。
 // ---------------------------------------------------------------------------
+// 分批按 _id 拉取联系方式，避免单次 _.in 数组过大
+async function fetchDetailsByIds(ids) {
+  const out = []
+  const CHUNK = 100
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK)
+    try {
+      const res = await db.collection('booking_details').where({ _id: _.in(slice) }).limit(1000).get()
+      out.push.apply(out, res.data || [])
+    } catch (e) {}
+  }
+  return out
+}
+
 async function attachContacts(list) {
   if (!list || !list.length) return []
-  let details = []
-  try {
-    const ids = list.map(b => b._id)
-    const res = await db.collection('booking_details').where({ _id: _.in(ids) }).limit(1000).get()
-    details = res.data || []
-  } catch (e) {
-    details = []
-  }
+  const ids = list.map(b => b._id).filter(Boolean)
+  const details = await fetchDetailsByIds(ids)
   const map = {}
   details.forEach(d => { map[d._id] = d })
   return list.map(b => {

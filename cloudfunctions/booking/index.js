@@ -95,14 +95,18 @@ async function myBookingIds(openid) {
   return ids
 }
 
+// 分批按 _id 拉取，避免单次 _.in 数组过大
 async function bookingsByIds(ids) {
-  if (!ids.length) return []
-  try {
-    const res = await db.collection('bookings').where({ _id: _.in(ids) }).limit(1000).get()
-    return res.data
-  } catch (e) {
-    return []
+  const out = []
+  const CHUNK = 100
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK)
+    try {
+      const res = await db.collection('bookings').where({ _id: _.in(slice) }).limit(1000).get()
+      out.push.apply(out, res.data || [])
+    } catch (e) {}
   }
+  return out
 }
 
 // 兼容拆分前遗留的旧数据（旧记录仍带 _openid）
