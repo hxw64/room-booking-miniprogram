@@ -84,6 +84,11 @@ export default {
     this.setupWatch()
     ensureLogin().catch(() => {})
   },
+  onShow() {
+    try {
+      this.loadBookingsOnce()
+    } catch (e) {}
+  },
   onUnload() {
     if (this.watcher) {
       try { this.watcher.close() } catch (e) {}
@@ -128,11 +133,13 @@ export default {
       }
     },
     loadBookingsOnce() {
-      const db = getDb()
-      db.collection('bookings').where({ roomId: this.roomId }).get({
-        success: (res) => { this.bookings = res.data || [] },
-        fail: () => {}
-      })
+      try {
+        const db = getDb()
+        db.collection('bookings').where({ roomId: this.roomId }).get({
+          success: (res) => { this.bookings = res.data || [] },
+          fail: () => {}
+        })
+      } catch (e) {}
     },
     seatBookings(seatNo) {
       return this.bookings.filter(b =>

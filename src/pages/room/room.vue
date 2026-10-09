@@ -93,6 +93,12 @@ export default {
     this.loadRoomInfo()
     ensureLogin().catch(() => {})
   },
+  onShow() {
+    if (this.room.openAccess) return
+    try {
+      this.loadBookingsOnce()
+    } catch (e) {}
+  },
   onUnload() {
     if (this.watcher) {
       try { this.watcher.close() } catch (e) {}
@@ -145,14 +151,16 @@ export default {
       }
     },
     loadBookingsOnce() {
-      const db = getDb()
-      db.collection('bookings').where({ roomId: this.roomId }).get({
-        success: (res) => {
-          this.bookings = res.data || []
-          this.computeSlots()
-        },
-        fail: () => {}
-      })
+      try {
+        const db = getDb()
+        db.collection('bookings').where({ roomId: this.roomId }).get({
+          success: (res) => {
+            this.bookings = res.data || []
+            this.computeSlots()
+          },
+          fail: () => {}
+        })
+      } catch (e) {}
     },
     validBookings() {
       return this.bookings.filter(b => b.status === 'approved' || b.status === 'pending')

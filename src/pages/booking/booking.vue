@@ -295,13 +295,29 @@ export default {
         setLocalProfile({ name: this.name.trim(), phone: this.phone.trim() })
         uni.showToast({ title: '提交成功 / Submitted', icon: 'success' })
         setTimeout(() => {
-          uni.redirectTo({ url: '/pages/mine/mine' })
+          this.backToRoom()
         }, 600)
       } catch (e) {
         uni.showToast({ title: e.message || '提交失败 / Failed', icon: 'none' })
       } finally {
         this.submitting = false
       }
+    },
+    backToRoom() {
+      let stackLength = 0
+      try {
+        stackLength = (getCurrentPages() || []).length
+      } catch (e) {
+        stackLength = 0
+      }
+      if (stackLength > 1) {
+        uni.navigateBack({ delta: 1 })
+        return
+      }
+      const url = this.room.roomType === 'seat'
+        ? '/pages/seat/seat?roomId=' + this.roomId
+        : '/pages/room/room?roomId=' + this.roomId
+      uni.redirectTo({ url })
     }
   }
 }
